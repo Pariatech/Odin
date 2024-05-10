@@ -21,6 +21,12 @@ when ODIN_OS == .Windows {
 			"system:shell32.lib",
 		}
 	}
+} else when ODIN_OS == .Linux {
+	when GLFW_SHARED {
+	foreign import glfw "system:glfw"
+	} else {
+		foreign import glfw "../lib/libglfw3.a"
+	}
 } else when ODIN_OS == .Darwin {
 	when GLFW_SHARED {
 		foreign import glfw {
