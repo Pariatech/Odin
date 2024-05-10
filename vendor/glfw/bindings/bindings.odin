@@ -23,7 +23,7 @@ when ODIN_OS == .Windows {
 	}
 } else when ODIN_OS == .Linux {
 	when GLFW_SHARED {
-	foreign import glfw "system:glfw"
+		foreign import glfw "system:glfw"
 	} else {
 		foreign import glfw "../lib/libglfw3.a"
 	}
