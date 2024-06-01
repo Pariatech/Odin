@@ -45,7 +45,13 @@ if [ -z "$LLVM_CONFIG" ]; then
 	fi
 fi
 
-: ${CXX=$($LLVM_CONFIG --bindir)/clang++}
+if [ -x "$(which clang++)" ]; then
+	: ${CXX="clang++"}
+elif [ -x "$($LLVM_CONFIG --bindir)/clang++" ]; then
+	: ${CXX=$($LLVM_CONFIG --bindir)/clang++}
+else
+	error "No clang++ command found. Set CXX to proceed."
+fi
 
 LLVM_VERSION="$($LLVM_CONFIG --version)"
 LLVM_VERSION_MAJOR="$(echo $LLVM_VERSION | awk -F. '{print $1}')"
@@ -64,10 +70,23 @@ Darwin)
 		fi
 	fi
 
-	CXXFLAGS="$CXXFLAGS $($LLVM_CONFIG --cxxflags --ldflags)"
+	darwin_sysroot=
+	if [ $(which xcrun) ]; then
+		darwin_sysroot="--sysroot $(xcrun --sdk macosx --show-sdk-path)"
+	elif [[ -e "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk" ]]; then
+		darwin_sysroot="--sysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk"
+	else
+		echo "Warning: MacOSX.sdk not found."
+	fi
+
+	CXXFLAGS="$CXXFLAGS $($LLVM_CONFIG --cxxflags --ldflags) ${darwin_sysroot}"
 	LDFLAGS="$LDFLAGS -liconv -ldl -framework System -lLLVM"
 	;;
 FreeBSD)
+	CXXFLAGS="$CXXFLAGS $($LLVM_CONFIG --cxxflags --ldflags)"
+	LDFLAGS="$LDFLAGS $($LLVM_CONFIG --libs core native --system-libs)"
+	;;
+NetBSD)
 	CXXFLAGS="$CXXFLAGS $($LLVM_CONFIG --cxxflags --ldflags)"
 	LDFLAGS="$LDFLAGS $($LLVM_CONFIG --libs core native --system-libs)"
 	;;

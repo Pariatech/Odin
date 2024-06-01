@@ -69,15 +69,27 @@ gb_internal i32 linker_stage(LinkerData *gen) {
 	if (is_arch_wasm()) {
 		timings_start_section(timings, str_lit("wasm-ld"));
 
+		String extra_orca_flags = {};
+
 	#if defined(GB_SYSTEM_WINDOWS)
+		if (build_context.metrics.os == TargetOs_orca) {
+			extra_orca_flags = str_lit(" W:/orca/installation/dev-afb9591/bin/liborca_wasm.a --export-dynamic");
+		}
+
 		result = system_exec_command_line_app("wasm-ld",
-			"\"%.*s\\bin\\wasm-ld\" \"%.*s.o\" -o \"%.*s\" %.*s %.*s",
+			"\"%.*s\\bin\\wasm-ld\" \"%.*s.o\" -o \"%.*s\" %.*s %.*s %.*s",
 			LIT(build_context.ODIN_ROOT),
-			LIT(output_filename), LIT(output_filename), LIT(build_context.link_flags), LIT(build_context.extra_linker_flags));
+			LIT(output_filename), LIT(output_filename), LIT(build_context.link_flags), LIT(build_context.extra_linker_flags),
+			LIT(extra_orca_flags));
 	#else
+		if (build_context.metrics.os == TargetOs_orca) {
+					extra_orca_flags = str_lit(" -L . -lorca --export-dynamic");
+				}
+
 		result = system_exec_command_line_app("wasm-ld",
-			"wasm-ld \"%.*s.o\" -o \"%.*s\" %.*s %.*s",
-			LIT(output_filename), LIT(output_filename), LIT(build_context.link_flags), LIT(build_context.extra_linker_flags));
+			"wasm-ld \"%.*s.o\" -o \"%.*s\" %.*s %.*s %.*s",
+			LIT(output_filename), LIT(output_filename), LIT(build_context.link_flags), LIT(build_context.extra_linker_flags),
+			LIT(extra_orca_flags));
 	#endif
 		return result;
 	}
@@ -212,10 +224,12 @@ gb_internal i32 linker_stage(LinkerData *gen) {
 				link_settings = gb_string_append_fmt(link_settings, " /PDB:\"%.*s\"", LIT(pdb_path));
 			}
 
-			if (build_context.no_crt) {
-				link_settings = gb_string_append_fmt(link_settings, " /nodefaultlib");
-			} else {
-				link_settings = gb_string_append_fmt(link_settings, " /defaultlib:libcmt");
+			if (build_context.build_mode != BuildMode_StaticLibrary) {
+				if (build_context.no_crt) {
+					link_settings = gb_string_append_fmt(link_settings, " /nodefaultlib");
+				} else {
+					link_settings = gb_string_append_fmt(link_settings, " /defaultlib:libcmt");
+				}
 			}
 
 			if (build_context.ODIN_DEBUG) {
@@ -257,20 +271,31 @@ gb_internal i32 linker_stage(LinkerData *gen) {
 					}
 				}
 
+				String linker_name = str_lit("link.exe");
 				switch (build_context.build_mode) {
 				case BuildMode_Executable:
 					link_settings = gb_string_append_fmt(link_settings, " /NOIMPLIB /NOEXP");
 					break;
 				}
 
+				switch (build_context.build_mode) {
+				case BuildMode_StaticLibrary:
+					linker_name = str_lit("lib.exe");
+					break;
+				default:
+					link_settings = gb_string_append_fmt(link_settings, " /incremental:no /opt:ref");
+					break;
+				}
+
+
 				result = system_exec_command_line_app("msvc-link",
-					"\"%.*slink.exe\" %s %.*s -OUT:\"%.*s\" %s "
-					"/nologo /incremental:no /opt:ref /subsystem:%.*s "
+					"\"%.*s%.*s\" %s %.*s -OUT:\"%.*s\" %s "
+					"/nologo /subsystem:%.*s "
 					"%.*s "
 					"%.*s "
 					"%s "
 					"",
-					LIT(vs_exe_path), object_files, LIT(res_path), LIT(output_filename),
+					LIT(vs_exe_path), LIT(linker_name), object_files, LIT(res_path), LIT(output_filename),
 					link_settings,
 					LIT(build_context.ODIN_WINDOWS_SUBSYSTEM),
 					LIT(build_context.link_flags),
@@ -456,6 +481,10 @@ gb_internal i32 linker_stage(LinkerData *gen) {
 
 			if (build_context.no_crt) {
 				link_settings = gb_string_append_fmt(link_settings, "-nostdlib ");
+			}
+
+			if (build_context.build_mode == BuildMode_StaticLibrary) {
+				compiler_error("TODO(bill): -build-mode:static on non-windows targets");
 			}
 
 			// NOTE(dweiler): We use clang as a frontend for the linker as there are

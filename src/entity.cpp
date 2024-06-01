@@ -85,8 +85,6 @@ enum EntityFlag : u64 {
 	EntityFlag_Require = 1ull<<50,
 	EntityFlag_ByPtr   = 1ull<<51, // enforce parameter is passed by pointer
 
-	EntityFlag_OldForOrSwitchValue = 1ull<<52,
-
 	EntityFlag_Overridden    = 1ull<<63,
 };
 
@@ -225,6 +223,7 @@ struct Entity {
 			Ast *      foreign_library_ident;
 			String     link_name;
 			String     link_prefix;
+			String     link_suffix;
 			String     link_section;
 			CommentGroup *docs;
 			CommentGroup *comment;
@@ -245,6 +244,7 @@ struct Entity {
 			Ast *   foreign_library_ident;
 			String  link_name;
 			String  link_prefix;
+			String  link_suffix;
 			DeferredProcedure deferred_procedure;
 
 			struct GenProcsData *gen_procs;
@@ -268,6 +268,7 @@ struct Entity {
 			Scope *scope;
 		} ImportName;
 		struct {
+			Ast *decl;
 			Slice<String> paths;
 			String name;
 			i64 priority_index;

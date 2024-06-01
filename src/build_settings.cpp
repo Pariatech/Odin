@@ -18,10 +18,12 @@ enum TargetOsKind : u16 {
 	TargetOs_essence,
 	TargetOs_freebsd,
 	TargetOs_openbsd,
+	TargetOs_netbsd,
 	TargetOs_haiku,
 	
 	TargetOs_wasi,
 	TargetOs_js,
+	TargetOs_orca,
 
 	TargetOs_freestanding,
 
@@ -84,10 +86,12 @@ gb_global String target_os_names[TargetOs_COUNT] = {
 	str_lit("essence"),
 	str_lit("freebsd"),
 	str_lit("openbsd"),
+	str_lit("netbsd"),
 	str_lit("haiku"),
 	
 	str_lit("wasi"),
 	str_lit("js"),
+	str_lit("orca"),
 
 	str_lit("freestanding"),
 };
@@ -644,6 +648,7 @@ struct QueryDataSetSettings {
 enum BuildModeKind {
 	BuildMode_Executable,
 	BuildMode_DynamicLibrary,
+	BuildMode_StaticLibrary,
 	BuildMode_Object,
 	BuildMode_Assembly,
 	BuildMode_LLVM_IR,
@@ -730,10 +735,11 @@ enum VetFlags : u64 {
 	VetFlag_Semicolon       = 1u<<4,
 	VetFlag_UnusedVariables = 1u<<5,
 	VetFlag_UnusedImports   = 1u<<6,
+	VetFlag_Deprecated      = 1u<<7,
 
 	VetFlag_Unused = VetFlag_UnusedVariables|VetFlag_UnusedImports,
 
-	VetFlag_All = VetFlag_Unused|VetFlag_Shadowing|VetFlag_UsingStmt,
+	VetFlag_All = VetFlag_Unused|VetFlag_Shadowing|VetFlag_UsingStmt|VetFlag_Deprecated,
 
 	VetFlag_Using = VetFlag_UsingStmt|VetFlag_UsingParam,
 };
@@ -755,6 +761,8 @@ u64 get_vet_flag_from_name(String const &name) {
 		return VetFlag_Style;
 	} else if (name == "semicolon") {
 		return VetFlag_Semicolon;
+	} else if (name == "deprecated") {
+		return VetFlag_Deprecated;
 	}
 	return VetFlag_NONE;
 }
@@ -972,7 +980,7 @@ gb_global TargetMetrics target_linux_arm32 = {
 	TargetOs_linux,
 	TargetArch_arm32,
 	4, 4, 4, 8,
-	str_lit("arm-linux-gnu"),
+	str_lit("arm-unknown-linux-gnueabihf"),
 };
 
 gb_global TargetMetrics target_darwin_amd64 = {
@@ -1017,6 +1025,13 @@ gb_global TargetMetrics target_openbsd_amd64 = {
 	str_lit("x86_64-unknown-openbsd-elf"),
 };
 
+gb_global TargetMetrics target_netbsd_amd64 = {
+	TargetOs_netbsd,
+	TargetArch_amd64,
+	8, 8, AMD64_MAX_ALIGNMENT, 16,
+	str_lit("x86_64-unknown-netbsd-elf"),
+};
+
 gb_global TargetMetrics target_haiku_amd64 = {
 	TargetOs_haiku,
 	TargetArch_amd64,
@@ -1051,6 +1066,15 @@ gb_global TargetMetrics target_wasi_wasm32 = {
 	TargetArch_wasm32,
 	4, 4, 8, 16,
 	str_lit("wasm32-wasi-js"),
+};
+
+
+gb_global TargetMetrics target_orca_wasm32 = {
+	TargetOs_orca,
+	TargetArch_wasm32,
+	4, 4, 8, 16,
+	str_lit("wasm32-wasi-js"),
+	// str_lit("e-m:e-p:32:32-i64:64-n32:64-S128"),
 };
 
 
@@ -1124,6 +1148,7 @@ gb_global NamedTargetMetrics named_targets[] = {
 	{ str_lit("freebsd_arm64"),       &target_freebsd_arm64  },
 
 	{ str_lit("openbsd_amd64"),       &target_openbsd_amd64  },
+	{ str_lit("netbsd_amd64"),        &target_netbsd_amd64   },
 	{ str_lit("haiku_amd64"),         &target_haiku_amd64    },
 
 	{ str_lit("freestanding_wasm32"), &target_freestanding_wasm32 },
@@ -1883,12 +1908,24 @@ gb_internal void init_build_context(TargetMetrics *cross_target, Subtarget subta
 			#endif
 		#elif defined(GB_SYSTEM_OPENBSD)
 			metrics = &target_openbsd_amd64;
+		#elif defined(GB_SYSTEM_NETBSD)
+			metrics = &target_netbsd_amd64;
 		#elif defined(GB_SYSTEM_HAIKU)
 			metrics = &target_haiku_amd64;
 		#elif defined(GB_CPU_ARM)
 			metrics = &target_linux_arm64;
 		#else
 			metrics = &target_linux_amd64;
+		#endif
+	#elif defined(GB_CPU_ARM)
+		#if defined(GB_SYSTEM_WINDOWS)
+			#error "Build Error: Unsupported architecture"
+		#elif defined(GB_SYSTEM_OSX)
+			#error "Build Error: Unsupported architecture"
+		#elif defined(GB_SYSTEM_FREEBSD)
+			#error "Build Error: Unsupported architecture"
+		#else
+			metrics = &target_linux_arm32;
 		#endif
 	#else
 		#if defined(GB_SYSTEM_WINDOWS)
@@ -1986,8 +2023,9 @@ gb_internal void init_build_context(TargetMetrics *cross_target, Subtarget subta
 		// if (bc->metrics.arch == TargetArch_wasm64) {
 		// 	link_flags = gb_string_appendc(link_flags, "-mwasm64 ");
 		// }
-		if (bc->no_entry_point) {
+		if (bc->no_entry_point || bc->metrics.os == TargetOs_orca) {
 			link_flags = gb_string_appendc(link_flags, "--no-entry ");
+			bc->no_entry_point = true; // just in case for the "orca" target
 		}
 		
 		bc->link_flags = make_string_c(link_flags);
@@ -2036,14 +2074,6 @@ gb_internal void init_build_context(TargetMetrics *cross_target, Subtarget subta
 
 	if (bc->metrics.os == TargetOs_freestanding) {
 		bc->ODIN_DEFAULT_TO_NIL_ALLOCATOR = !bc->ODIN_DEFAULT_TO_PANIC_ALLOCATOR;
-	} else if (is_arch_wasm()) {
-		if (bc->metrics.os == TargetOs_js || bc->metrics.os == TargetOs_wasi) {
-			// TODO(bill): Should these even have a default "heap-like" allocator?
-		}
-
-		if (!bc->ODIN_DEFAULT_TO_NIL_ALLOCATOR && !bc->ODIN_DEFAULT_TO_PANIC_ALLOCATOR) {
-			bc->ODIN_DEFAULT_TO_PANIC_ALLOCATOR = true;
-		}
 	}
 }
 
@@ -2269,7 +2299,12 @@ gb_internal bool init_build_paths(String init_filename) {
 		} else if (build_context.metrics.os == TargetOs_darwin) {
 			output_extension = STR_LIT("dylib");
 		}
-	} else if (build_context.build_mode == BuildMode_Object) {
+	} else if (build_context.build_mode == BuildMode_StaticLibrary) {
+		output_extension = STR_LIT("a");
+		if (build_context.metrics.os == TargetOs_windows) {
+			output_extension = STR_LIT("lib");
+		}
+	}else if (build_context.build_mode == BuildMode_Object) {
 		// By default use a .o object extension.
 		output_extension = STR_LIT("o");
 
@@ -2420,6 +2455,7 @@ gb_internal bool init_build_paths(String init_filename) {
 		case TargetOs_essence:
 		case TargetOs_freebsd:
 		case TargetOs_openbsd:
+		case TargetOs_netbsd:
 		case TargetOs_haiku:
 			gb_printf_err("-no-crt on unix systems requires either -default-to-nil-allocator or -default-to-panic-allocator to also be present because the default allocator requires crt\n");
 			return false;

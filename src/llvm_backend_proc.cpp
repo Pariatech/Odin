@@ -2384,9 +2384,10 @@ gb_internal lbValue lb_build_builtin_proc(lbProcedure *p, Ast *expr, TypeAndValu
 
 			lbValue ptr0 = lb_emit_conv(p, lb_build_expr(p, ce->args[0]), t_uintptr);
 			lbValue ptr1 = lb_emit_conv(p, lb_build_expr(p, ce->args[1]), t_uintptr);
+			ptr0 = lb_emit_conv(p, ptr0, t_int);
+			ptr1 = lb_emit_conv(p, ptr1, t_int);
 
-			lbValue diff = lb_emit_arith(p, Token_Sub, ptr0, ptr1, t_uintptr);
-			diff = lb_emit_conv(p, diff, t_int);
+			lbValue diff = lb_emit_arith(p, Token_Sub, ptr0, ptr1, t_int);
 			return lb_emit_arith(p, Token_Quo, diff, lb_const_int(p->module, t_int, type_size_of(elem)), t_int);
 		}
 
@@ -2835,8 +2836,7 @@ gb_internal lbValue lb_build_builtin_proc(lbProcedure *p, Ast *expr, TypeAndValu
 				{
 					GB_ASSERT(arg_count <= 7);
 
-					char asm_string_default[] = "int $$0x80";
-					char *asm_string = asm_string_default;
+					char asm_string[] = "int $$0x80";
 					gbString constraints = gb_string_make(heap_allocator(), "={eax}");
 
 					for (unsigned i = 0; i < gb_min(arg_count, 6); i++) {
@@ -2848,15 +2848,10 @@ gb_internal lbValue lb_build_builtin_proc(lbProcedure *p, Ast *expr, TypeAndValu
 							"edx",
 							"esi",
 							"edi",
+							"ebp",
 						};
 						constraints = gb_string_appendc(constraints, regs[i]);
 						constraints = gb_string_appendc(constraints, "}");
-					}
-					if (arg_count == 7) {
-						char asm_string7[] = "push %[arg6]\npush %%ebp\nmov 4(%%esp), %%ebp\nint $0x80\npop %%ebp\nadd $4, %%esp";
-						asm_string = asm_string7;
-
-						constraints = gb_string_appendc(constraints, ",rm");
 					}
 
 					inline_asm = llvm_get_inline_asm(func_type, make_string_c(asm_string), make_string_c(constraints));
@@ -2909,7 +2904,6 @@ gb_internal lbValue lb_build_builtin_proc(lbProcedure *p, Ast *expr, TypeAndValu
 				break;
 			case TargetArch_arm32:
 				{
-					// TODO(bill): Check this is correct
 					GB_ASSERT(arg_count <= 7);
 
 					char asm_string[] = "svc #0";
@@ -2917,13 +2911,14 @@ gb_internal lbValue lb_build_builtin_proc(lbProcedure *p, Ast *expr, TypeAndValu
 					for (unsigned i = 0; i < arg_count; i++) {
 						constraints = gb_string_appendc(constraints, ",{");
 						static char const *regs[] = {
-							"r8",
+							"r7",
 							"r0",
 							"r1",
 							"r2",
 							"r3",
 							"r4",
 							"r5",
+							"r6",
 						};
 						constraints = gb_string_appendc(constraints, regs[i]);
 						constraints = gb_string_appendc(constraints, "}");
