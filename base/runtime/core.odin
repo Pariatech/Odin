@@ -397,11 +397,34 @@ Logger :: struct {
 	options:      Logger_Options,
 }
 
+
+Random_Generator_Mode :: enum {
+	Read,
+	Reset,
+	Query_Info,
+}
+
+Random_Generator_Query_Info_Flag :: enum u32 {
+	Cryptographic,
+	Uniform,
+	External_Entropy,
+	Resettable,
+}
+Random_Generator_Query_Info :: distinct bit_set[Random_Generator_Query_Info_Flag; u32]
+
+Random_Generator_Proc :: #type proc(data: rawptr, mode: Random_Generator_Mode, p: []byte)
+
+Random_Generator :: struct {
+	procedure: Random_Generator_Proc,
+	data:      rawptr,
+}
+
 Context :: struct {
 	allocator:              Allocator,
 	temp_allocator:         Allocator,
 	assertion_failure_proc: Assertion_Failure_Proc,
 	logger:                 Logger,
+	random_generator:       Random_Generator,
 
 	user_ptr:   rawptr,
 	user_index: int,
@@ -470,6 +493,15 @@ Raw_Soa_Pointer :: struct {
 	index: int,
 }
 
+Raw_Complex32     :: struct {real, imag: f16}
+Raw_Complex64     :: struct {real, imag: f32}
+Raw_Complex128    :: struct {real, imag: f64}
+Raw_Quaternion64  :: struct {imag, jmag, kmag: f16, real: f16}
+Raw_Quaternion128 :: struct {imag, jmag, kmag: f32, real: f32}
+Raw_Quaternion256 :: struct {imag, jmag, kmag: f64, real: f64}
+Raw_Quaternion64_Vector_Scalar  :: struct {vector: [3]f16, scalar: f16}
+Raw_Quaternion128_Vector_Scalar :: struct {vector: [3]f32, scalar: f32}
+Raw_Quaternion256_Vector_Scalar :: struct {vector: [3]f64, scalar: f64}
 
 
 /*
@@ -551,6 +583,19 @@ Odin_Platform_Subtarget_Type :: type_of(ODIN_PLATFORM_SUBTARGET)
 */
 Odin_Sanitizer_Flags :: type_of(ODIN_SANITIZER_FLAGS)
 
+/*
+	// Defined internally by the compiler
+	Odin_Optimization_Mode :: enum int {
+		None       = -1,
+		Minimal    =  0,
+		Size       =  1,
+		Speed      =  2,
+		Aggressive =  3,
+	}
+
+	ODIN_OPTIMIZATION_MODE // is a constant
+*/
+Odin_Optimization_Mode :: type_of(ODIN_OPTIMIZATION_MODE)
 
 /////////////////////////////
 // Init Startup Procedures //
@@ -686,13 +731,16 @@ __init_context :: proc "contextless" (c: ^Context) {
 
 	c.logger.procedure = default_logger_proc
 	c.logger.data = nil
+
+	c.random_generator.procedure = default_random_generator_proc
+	c.random_generator.data = nil
 }
 
 default_assertion_failure_proc :: proc(prefix, message: string, loc: Source_Code_Location) -> ! {
 	when ODIN_OS == .Freestanding {
 		// Do nothing
 	} else {
-		when !ODIN_DISABLE_ASSERT {
+		when ODIN_OS != .Orca && !ODIN_DISABLE_ASSERT {
 			print_caller_location(loc)
 			print_string(" ")
 		}
@@ -701,7 +749,18 @@ default_assertion_failure_proc :: proc(prefix, message: string, loc: Source_Code
 			print_string(": ")
 			print_string(message)
 		}
-		print_byte('\n')
+
+		when ODIN_OS == .Orca {
+			assert_fail(
+				cstring(raw_data(loc.file_path)),
+				cstring(raw_data(loc.procedure)),
+				loc.line,
+				"",
+				cstring(raw_data(orca_stderr_buffer[:orca_stderr_buffer_idx])),
+			)
+		} else {
+			print_byte('\n')
+		}
 	}
 	trap()
 }

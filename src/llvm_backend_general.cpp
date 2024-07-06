@@ -78,7 +78,8 @@ gb_internal void lb_init_module(lbModule *m, Checker *c) {
 		array_init(&m->procedures_to_generate, a, 0, c->info.all_procedures.count);
 		map_init(&m->procedure_values,               c->info.all_procedures.count*2);
 	}
-	array_init(&m->global_procedures_and_types_to_create, a, 0, 1024);
+	array_init(&m->global_procedures_to_create, a, 0, 1024);
+	array_init(&m->global_types_to_create, a, 0, 1024);
 	array_init(&m->missing_procedures_to_check, a, 0, 16);
 	map_init(&m->debug_values);
 
@@ -1010,7 +1011,7 @@ gb_internal void lb_emit_store(lbProcedure *p, lbValue ptr, lbValue value) {
 		return;
 	}
 
-	Type *a = type_deref(ptr.type);
+	Type *a = type_deref(ptr.type, true);
 	if (LLVMIsNull(value.value)) {
 		LLVMTypeRef src_t = llvm_addr_type(p->module, ptr);
 		if (is_type_proc(a)) {
@@ -1108,9 +1109,13 @@ gb_internal lbValue lb_emit_load(lbProcedure *p, lbValue value) {
 	Type *t = type_deref(value.type);
 	LLVMValueRef v = LLVMBuildLoad2(p->builder, lb_type(p->module, t), value.value, "");
 
-	u64 is_packed = lb_get_metadata_custom_u64(p->module, value.value, ODIN_METADATA_IS_PACKED);
-	if (is_packed != 0) {
-		LLVMSetAlignment(v, 1);
+	// If it is not an instruction it isn't a GEP, so we don't need to track alignment in the metadata,
+	// which is not possible anyway (only LLVM instructions can have metadata).
+	if (LLVMIsAInstruction(value.value)) {
+		u64 is_packed = lb_get_metadata_custom_u64(p->module, value.value, ODIN_METADATA_IS_PACKED);
+		if (is_packed != 0) {
+			LLVMSetAlignment(v, 1);
+		}
 	}
 
 	return lbValue{v, t};
@@ -1161,7 +1166,7 @@ gb_internal lbValue lb_addr_load(lbProcedure *p, lbAddr const &addr) {
 			lbValue copy_size = byte_size;
 			lbValue src_offset = lb_emit_conv(p, src, t_u8_ptr);
 			src_offset = lb_emit_ptr_offset(p, src_offset, byte_offset);
-			if (addr.bitfield.bit_offset + dst_byte_size <= total_bitfield_bit_size) {
+			if (addr.bitfield.bit_offset + 8*dst_byte_size <= total_bitfield_bit_size) {
 				do_mask = true;
 				copy_size = lb_const_int(p->module, t_uintptr, dst_byte_size);
 			}
@@ -1383,8 +1388,6 @@ gb_internal lbValue lb_addr_load(lbProcedure *p, lbAddr const &addr) {
 
 		LLVMTypeRef vector_type = nullptr;
 		if (lb_try_vector_cast(p->module, addr.addr, &vector_type)) {
-			LLVMSetAlignment(res.addr.value, cast(unsigned)lb_alignof(vector_type));
-
 			LLVMValueRef vp = LLVMBuildPointerCast(p->builder, addr.addr.value, LLVMPointerType(vector_type, 0), "");
 			LLVMValueRef v = LLVMBuildLoad2(p->builder, vector_type, vp, "");
 			LLVMValueRef scalars[4] = {};
@@ -1393,6 +1396,8 @@ gb_internal lbValue lb_addr_load(lbProcedure *p, lbAddr const &addr) {
 			}
 			LLVMValueRef mask = LLVMConstVector(scalars, addr.swizzle.count);
 			LLVMValueRef sv = llvm_basic_shuffle(p, v, mask);
+
+			LLVMSetAlignment(res.addr.value, cast(unsigned)lb_alignof(LLVMTypeOf(sv)));
 
 			LLVMValueRef dst = LLVMBuildPointerCast(p->builder, ptr.value, LLVMPointerType(LLVMTypeOf(sv), 0), "");
 			LLVMBuildStore(p->builder, sv, dst);

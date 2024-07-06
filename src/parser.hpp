@@ -74,7 +74,6 @@ enum AstFileFlag : u32 {
 	AstFile_IsPrivatePkg = 1<<0,
 	AstFile_IsPrivateFile = 1<<1,
 
-	AstFile_IsTest    = 1<<3,
 	AstFile_IsLazy    = 1<<4,
 
 	AstFile_NoInstrumentation = 1<<5,
@@ -458,6 +457,7 @@ AST_KIND(_ExprBegin,  "",  bool) \
 		bool         optional_ok_one; \
 		bool         was_selector; \
 		AstSplitArgs *split_args; \
+		Entity *entity_procedure_of; \
 	}) \
 	AST_KIND(FieldValue,      "field value",              struct { Token eq; Ast *field, *value; }) \
 	AST_KIND(EnumFieldValue,  "enum field value",         struct { \

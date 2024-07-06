@@ -140,6 +140,7 @@ struct TypeStruct {
 	i64             custom_field_align;
 	Type *          polymorphic_params; // Type_Tuple
 	Type *          polymorphic_parent;
+	Wait_Signal     polymorphic_wait_signal;
 
 	Type *          soa_elem;
 	i32             soa_count;
@@ -167,6 +168,7 @@ struct TypeUnion {
 	i64           custom_align;
 	Type *        polymorphic_params; // Type_Tuple
 	Type *        polymorphic_parent;
+	Wait_Signal   polymorphic_wait_signal;
 
 	i16           tag_size;
 	bool          is_polymorphic;
@@ -456,6 +458,15 @@ gb_internal Selection sub_selection(Selection const &sel, isize offset) {
 	res.index.capacity = res.index.count;
 	return res;
 }
+
+gb_internal Selection trim_selection(Selection const &sel) {
+	Selection res = {};
+	res.index.data = sel.index.data;
+	res.index.count = gb_max(sel.index.count - 1, 0);
+	res.index.capacity = res.index.count;
+	return res;
+}
+
 
 gb_global Type basic_types[] = {
 	{Type_Basic, {Basic_Invalid,           0,                                          0, STR_LIT("invalid type")}},
@@ -1084,6 +1095,7 @@ gb_internal Type *alloc_type_struct() {
 gb_internal Type *alloc_type_struct_complete() {
 	Type *t = alloc_type(Type_Struct);
 	wait_signal_set(&t->Struct.fields_wait_signal);
+	wait_signal_set(&t->Struct.polymorphic_wait_signal);
 	return t;
 }
 
@@ -1482,10 +1494,10 @@ gb_internal i64 matrix_align_of(Type *t, struct TypePath *tp) {
 	i64 total_expected_size = row_count*t->Matrix.column_count*elem_size;
 	// i64 min_alignment = prev_pow2(elem_align * row_count);
 	i64 min_alignment = prev_pow2(total_expected_size);
-	while ((total_expected_size % min_alignment) != 0) {
+	while (total_expected_size != 0 && (total_expected_size % min_alignment) != 0) {
 		min_alignment >>= 1;
 	}
-	GB_ASSERT(min_alignment >= elem_align);
+	min_alignment = gb_max(min_alignment, elem_align);
 	
 	i64 align = gb_min(min_alignment, build_context.max_simd_align);
 	return align;
@@ -2127,15 +2139,18 @@ gb_internal bool is_type_polymorphic_record_unspecialized(Type *t) {
 	return false;
 }
 
+
 gb_internal TypeTuple *get_record_polymorphic_params(Type *t) {
 	t = base_type(t);
 	switch (t->kind) {
 	case Type_Struct:
+		wait_signal_until_available(&t->Struct.polymorphic_wait_signal);
 		if (t->Struct.polymorphic_params) {
 			return &t->Struct.polymorphic_params->Tuple;
 		}
 		break;
 	case Type_Union:
+		wait_signal_until_available(&t->Union.polymorphic_wait_signal);
 		if (t->Union.polymorphic_params) {
 			return &t->Union.polymorphic_params->Tuple;
 		}
@@ -2350,6 +2365,7 @@ gb_internal bool type_has_nil(Type *t) {
 	}
 	return false;
 }
+
 
 gb_internal bool elem_type_can_be_constant(Type *t) {
 	t = base_type(t);
@@ -3209,7 +3225,7 @@ gb_internal Selection lookup_field_with_selection(Type *type_, String field_name
 				}
 			}
 			if (type->kind == Type_Struct) {
-				wait_signal_until_available(&type->Struct.fields_wait_signal);
+				// wait_signal_until_available(&type->Struct.fields_wait_signal);
 				isize field_count = type->Struct.fields.count;
 				if (field_count != 0) for_array(i, type->Struct.fields) {
 					Entity *f = type->Struct.fields[i];
@@ -3239,7 +3255,7 @@ gb_internal Selection lookup_field_with_selection(Type *type_, String field_name
 		}
 
 		if (type->kind == Type_Struct) {
-			wait_signal_until_available(&type->Struct.fields_wait_signal);
+			// wait_signal_until_available(&type->Struct.fields_wait_signal);
 			Scope *s = type->Struct.scope;
 			if (s != nullptr) {
 				Entity *found = scope_lookup_current(s, field_name);

@@ -501,6 +501,9 @@ gb_internal Type *check_assignment_variable(CheckerContext *ctx, Operand *lhs, O
 		return nullptr;
 
 	case Addressing_Variable:
+		if (e && e->kind == Entity_Variable && e->Variable.is_rodata) {
+			error(lhs->expr, "Assignment to variable '%.*s' marked as @(rodata) is not allowed", LIT(e->token.string));
+		}
 		break;
 
 	case Addressing_MapIndex: {
@@ -1252,9 +1255,21 @@ gb_internal void check_switch_stmt(CheckerContext *ctx, Ast *node, u32 mod_flags
 					error_line("\t%.*s\n", LIT(f->token.string));
 				}
 			}
-			error_line("\n");
-
 			error_line("\tSuggestion: Was '#partial switch' wanted?\n");
+		}
+	}
+
+	if (build_context.strict_style) {
+		Token stok = ss->token;
+		for_array(i, bs->stmts) {
+			Ast *stmt = bs->stmts[i];
+			if (stmt->kind != Ast_CaseClause) {
+				continue;
+			}
+			Token ctok = stmt->CaseClause.token;
+			if (ctok.pos.column > stok.pos.column) {
+				error(ctok, "With '-strict-style', 'case' statements must share the same column as the 'switch' token");
+			}
 		}
 	}
 }
@@ -2055,6 +2070,13 @@ gb_internal void check_value_decl_stmt(CheckerContext *ctx, Ast *node, u32 mod_f
 				}
 			}
 		}
+		if (ac.rodata) {
+			if (ac.is_static) {
+				e->Variable.is_rodata = true;
+			} else {
+				error(e->token, "Only global or @(static) variables can have @(rodata) applied");
+			}
+		}
 		if (ac.thread_local_model != "") {
 			String name = e->token.string;
 			if (name == "_") {
@@ -2216,8 +2238,16 @@ gb_internal void check_expr_stmt(CheckerContext *ctx, Ast *node) {
 		}
 		if (do_require) {
 			gbString expr_str = expr_to_string(ce->proc);
+			defer (gb_string_free(expr_str));
+			if (builtin_id) {
+				String real_name = builtin_procs[builtin_id].name;
+				if (real_name != make_string(cast(u8 const *)expr_str, gb_string_length(expr_str))) {
+					error(node, "'%s' ('%.*s.%.*s') requires that its results must be handled", expr_str,
+					      LIT(builtin_proc_pkg_name[builtin_procs[builtin_id].pkg]), LIT(real_name));
+					return;
+				}
+			}
 			error(node, "'%s' requires that its results must be handled", expr_str);
-			gb_string_free(expr_str);
 		}
 		return;
 	} else if (expr && expr->kind == Ast_SelectorCallExpr) {
@@ -2493,6 +2523,10 @@ gb_internal void check_return_stmt(CheckerContext *ctx, Ast *node) {
 					unsafe_return_error(o, "the address of an indexed variable", f->type);
 				}
 			}
+		} else if (o.mode == Addressing_Constant && is_type_slice(o.type)) {
+			ERROR_BLOCK();
+			unsafe_return_error(o, "a compound literal of a slice");
+			error_line("\tNote: A constant slice value will use the memory of the current stack frame\n");
 		}
 	}
 

@@ -335,7 +335,7 @@ bool check_constant_parameter_value(Type *type, Ast *expr) {
 
 gb_internal Type *check_record_polymorphic_params(CheckerContext *ctx, Ast *polymorphic_params,
                                                   bool *is_polymorphic_,
-                                                  Ast *node, Array<Operand> *poly_operands) {
+                                                  Array<Operand> *poly_operands) {
 	Type *polymorphic_params_type = nullptr;
 	GB_ASSERT(is_polymorphic_ != nullptr);
 
@@ -564,19 +564,7 @@ gb_internal bool check_record_poly_operand_specialization(CheckerContext *ctx, T
 gb_internal Entity *find_polymorphic_record_entity(GenTypesData *found_gen_types, isize param_count, Array<Operand> const &ordered_operands) {
 	for (Entity *e : found_gen_types->types) {
 		Type *t = base_type(e->type);
-		TypeTuple *tuple = nullptr;
-		switch (t->kind) {
-		case Type_Struct:
-			if (t->Struct.polymorphic_params) {
-				tuple = &t->Struct.polymorphic_params->Tuple;
-			}
-			break;
-		case Type_Union:
-			if (t->Union.polymorphic_params) {
-				tuple = &t->Union.polymorphic_params->Tuple;
-			}
-			break;
-		}
+		TypeTuple *tuple = get_record_polymorphic_params(t);
 		GB_ASSERT_MSG(tuple != nullptr, "%s :: %s", type_to_string(e->type), type_to_string(t));
 		GB_ASSERT(param_count == tuple->variables.count);
 
@@ -655,14 +643,17 @@ gb_internal void check_struct_type(CheckerContext *ctx, Type *struct_type, Ast *
 		context = str_lit("struct #raw_union");
 	}
 
+	struct_type->Struct.node       = node;
 	struct_type->Struct.scope      = ctx->scope;
 	struct_type->Struct.is_packed  = st->is_packed;
 	struct_type->Struct.is_no_copy = st->is_no_copy;
 	struct_type->Struct.polymorphic_params = check_record_polymorphic_params(
 		ctx, st->polymorphic_params,
 		&struct_type->Struct.is_polymorphic,
-		node, poly_operands
+		poly_operands
 	);
+	wait_signal_set(&struct_type->Struct.polymorphic_wait_signal);
+
 	struct_type->Struct.is_poly_specialized = check_record_poly_operand_specialization(ctx, struct_type, poly_operands, &struct_type->Struct.is_polymorphic);
 	if (original_type_for_poly) {
 		GB_ASSERT(named_type != nullptr);
@@ -706,12 +697,15 @@ gb_internal void check_union_type(CheckerContext *ctx, Type *union_type, Ast *no
 	ast_node(ut, UnionType, node);
 
 
+	union_type->Union.node  = node;
 	union_type->Union.scope = ctx->scope;
 	union_type->Union.polymorphic_params = check_record_polymorphic_params(
 		ctx, ut->polymorphic_params,
 		&union_type->Union.is_polymorphic,
-		node, poly_operands
+		poly_operands
 	);
+	wait_signal_set(&union_type->Union.polymorphic_wait_signal);
+
 	union_type->Union.is_poly_specialized = check_record_poly_operand_specialization(ctx, union_type, poly_operands, &union_type->Union.is_polymorphic);
 	if (original_type_for_poly) {
 		GB_ASSERT(named_type != nullptr);
@@ -746,7 +740,7 @@ gb_internal void check_union_type(CheckerContext *ctx, Type *union_type, Ast *no
 				gb_string_free(str);
 			} else {
 				for_array(j, variants) {
-					if (are_types_identical(t, variants[j])) {
+					if (union_variant_index_types_equal(t, variants[j])) {
 						ok = false;
 						ERROR_BLOCK();
 						gbString str = type_to_string(t);
@@ -784,7 +778,7 @@ gb_internal void check_union_type(CheckerContext *ctx, Type *union_type, Ast *no
 			}
 		}
 		if (variants.count < 2) {
-			error(ut->align, "A union with #no_nil must have at least 2 variants");
+			error(node, "A union with #no_nil must have at least 2 variants");
 		}
 		break;
 	}
@@ -1457,8 +1451,8 @@ gb_internal bool check_type_specialization_to(CheckerContext *ctx, Type *special
 		    s->Struct.polymorphic_params != nullptr &&
 		    t->Struct.polymorphic_params != nullptr) {
 
-			TypeTuple *s_tuple = &s->Struct.polymorphic_params->Tuple;
-			TypeTuple *t_tuple = &t->Struct.polymorphic_params->Tuple;
+			TypeTuple *s_tuple = get_record_polymorphic_params(s);
+			TypeTuple *t_tuple = get_record_polymorphic_params(t);
 			GB_ASSERT(t_tuple->variables.count == s_tuple->variables.count);
 			for_array(i, s_tuple->variables) {
 				Entity *s_e = s_tuple->variables[i];
@@ -1510,8 +1504,8 @@ gb_internal bool check_type_specialization_to(CheckerContext *ctx, Type *special
 		    s->Union.polymorphic_params != nullptr &&
 		    t->Union.polymorphic_params != nullptr) {
 
-			TypeTuple *s_tuple = &s->Union.polymorphic_params->Tuple;
-			TypeTuple *t_tuple = &t->Union.polymorphic_params->Tuple;
+			TypeTuple *s_tuple = get_record_polymorphic_params(s);
+			TypeTuple *t_tuple = get_record_polymorphic_params(t);
 			GB_ASSERT(t_tuple->variables.count == s_tuple->variables.count);
 			for_array(i, s_tuple->variables) {
 				Entity *s_e = s_tuple->variables[i];

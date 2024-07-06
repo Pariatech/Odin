@@ -230,6 +230,7 @@ struct Entity {
 			bool       is_foreign;
 			bool       is_export;
 			bool       is_global;
+			bool       is_rodata;
 		} Variable;
 		struct {
 			Type * type_parameter_specialization;
@@ -255,6 +256,7 @@ struct Entity {
 			bool    generated_from_polymorphic : 1;
 			bool    entry_point_only           : 1;
 			bool    has_instrumentation        : 1;
+			bool    is_memcpy_like             : 1;
 		} Procedure;
 		struct {
 			Array<Entity *> entities;

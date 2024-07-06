@@ -51,6 +51,12 @@ enum StmtFlag {
 enum BuiltinProcPkg {
 	BuiltinProcPkg_builtin,
 	BuiltinProcPkg_intrinsics,
+	BuiltinProcPkg_COUNT
+};
+
+String builtin_proc_pkg_name[BuiltinProcPkg_COUNT] = {
+	str_lit("builtin"),
+	str_lit("intrinsics"),
 };
 
 struct BuiltinProc {
@@ -133,6 +139,7 @@ struct AttributeContext {
 	bool    entry_point_only      : 1;
 	bool    instrumentation_enter : 1;
 	bool    instrumentation_exit  : 1;
+	bool    rodata                : 1;
 	u32 optimization_mode; // ProcedureOptimizationMode
 	i64 foreign_import_priority_index;
 	String extra_linker_flags;
@@ -336,7 +343,16 @@ struct ObjcMsgData {
 	ObjcMsgKind kind;
 	Type *proc_type;
 };
+
+enum LoadFileTier {
+	LoadFileTier_Invalid,
+	LoadFileTier_Exists,
+	LoadFileTier_Contents,
+};
+
 struct LoadFileCache {
+	LoadFileTier   tier;
+	bool           exists;
 	String         path;
 	gbFileError    file_error;
 	String         data;
@@ -366,6 +382,17 @@ struct GenTypesData {
 	RecursiveMutex  mutex;
 };
 
+struct Defineable {
+	String        name;
+	ExactValue    default_value;
+	TokenPos      pos;
+	CommentGroup *docs;
+
+	// These strings are only computed from previous fields when defineables are being shown or exported.
+	String default_value_str;
+	String pos_str;
+};
+
 // CheckerInfo stores all the symbol information for a type-checked program
 struct CheckerInfo {
 	Checker *checker;
@@ -391,6 +418,9 @@ struct CheckerInfo {
 	Array<Entity *> definitions;
 	Array<Entity *> entities;
 	Array<Entity *> required_foreign_imports_through_force;
+
+	BlockingMutex     defineables_mutex;
+	Array<Defineable> defineables;
 
 
 	// Below are accessed within procedures

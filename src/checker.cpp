@@ -3,6 +3,8 @@
 #include "entity.cpp"
 #include "types.cpp"
 
+String get_final_microarchitecture();
+
 gb_internal void check_expr(CheckerContext *c, Operand *operand, Ast *expression);
 gb_internal void check_expr_or_type(CheckerContext *c, Operand *operand, Ast *expression, Type *type_hint=nullptr);
 gb_internal void add_comparison_procedures_for_fields(CheckerContext *c, Type *t);
@@ -344,6 +346,7 @@ gb_internal Scope *scope_of_node(Ast *node) {
 
 gb_internal void check_open_scope(CheckerContext *c, Ast *node) {
 	node = unparen_expr(node);
+	GB_ASSERT(node != nullptr);
 	GB_ASSERT(node->kind == Ast_Invalid ||
 	          is_ast_stmt(node) ||
 	          is_ast_type(node));
@@ -844,6 +847,10 @@ gb_internal void add_declaration_dependency(CheckerContext *c, Entity *e) {
 	if (e == nullptr) {
 		return;
 	}
+	if (e->flags & EntityFlag_Disabled) {
+		// ignore the dependencies if it has been `@(disabled=true)`
+		return;
+	}
 	if (c->decl != nullptr) {
 		add_dependency(c->info, c->decl, e);
 	}
@@ -1040,6 +1047,8 @@ gb_internal void init_universal(void) {
 		add_global_enum_constant(fields, "ODIN_ARCH", bc->metrics.arch);
 		add_global_string_constant("ODIN_ARCH_STRING", target_arch_names[bc->metrics.arch]);
 	}
+
+	add_global_string_constant("ODIN_MICROARCH_STRING", get_final_microarchitecture());
 	
 	{
 		GlobalEnumValue values[BuildMode_COUNT] = {
@@ -1131,6 +1140,17 @@ gb_internal void init_universal(void) {
 	add_global_constant("ODIN_COMPILE_TIMESTAMP", t_untyped_integer, exact_value_i64(odin_compile_timestamp()));
 
 	{
+		String version = {};
+
+		#ifdef GIT_SHA
+		version.text = cast(u8 *)GIT_SHA;
+		version.len = gb_strlen(GIT_SHA);
+		#endif
+
+		add_global_string_constant("ODIN_VERSION_HASH", version);
+	}
+
+	{
 		bool f16_supported = lb_use_new_pass_system();
 		if (is_arch_wasm()) {
 			f16_supported = false;
@@ -1167,6 +1187,18 @@ gb_internal void init_universal(void) {
 		add_global_constant("ODIN_SANITIZER_FLAGS", named_type, exact_value_u64(bc->sanitizer_flags));
 	}
 
+	{
+		GlobalEnumValue values[5] = {
+			{"None",      -1},
+			{"Minimal",    0},
+			{"Size",       1},
+			{"Speed",      2},
+			{"Aggressive", 3},
+		};
+
+		auto fields = add_global_enum_type(str_lit("Odin_Optimization_Mode"), values, gb_count_of(values));
+		add_global_enum_constant(fields, "ODIN_OPTIMIZATION_MODE", bc->optimization_level);
+	}
 
 
 // Builtin Procedures
@@ -1275,6 +1307,7 @@ gb_internal void init_checker_info(CheckerInfo *i) {
 	array_init(&i->init_procedures, a, 0, 0);
 	array_init(&i->fini_procedures, a, 0, 0);
 	array_init(&i->required_foreign_imports_through_force, a, 0, 0);
+	array_init(&i->defineables, a);
 
 	map_init(&i->objc_msgSend_types);
 	string_map_init(&i->load_file_cache);
@@ -1304,6 +1337,7 @@ gb_internal void destroy_checker_info(CheckerInfo *i) {
 	string_map_destroy(&i->packages);
 	array_free(&i->variable_init_order);
 	array_free(&i->required_foreign_imports_through_force);
+	array_free(&i->defineables);
 
 	mpsc_destroy(&i->entity_queue);
 	mpsc_destroy(&i->definition_queue);
@@ -1436,6 +1470,7 @@ gb_internal Entity *implicit_entity_of_node(Ast *clause) {
 }
 
 gb_internal Entity *entity_of_node(Ast *expr) {
+retry:;
 	expr = unparen_expr(expr);
 	switch (expr->kind) {
 	case_ast_node(ident, Ident, expr);
@@ -1451,6 +1486,21 @@ gb_internal Entity *entity_of_node(Ast *expr) {
 	case_end;
 	case_ast_node(cc, CaseClause, expr);
 		return cc->implicit_entity;
+	case_end;
+
+	case_ast_node(ce, CallExpr, expr);
+		return ce->entity_procedure_of;
+	case_end;
+
+	case_ast_node(we, TernaryWhenExpr, expr);
+		if (we->cond == nullptr) {
+			break;
+		}
+		if (we->cond->tav.value.kind != ExactValue_Bool) {
+			break;
+		}
+		expr = we->cond->tav.value.value_bool ? we->x : we->y;
+		goto retry;
 	case_end;
 	}
 	return nullptr;
@@ -3460,20 +3510,6 @@ gb_internal DECL_ATTRIBUTE_PROC(proc_decl_attribute) {
 			error(elem, "Expected a string value for '%.*s'", LIT(name));
 		}
 		return true;
-	} else if (name == "warning") {
-		ExactValue ev = check_decl_attribute_value(c, value);
-
-		if (ev.kind == ExactValue_String) {
-			String msg = ev.value_string;
-			if (msg.len == 0) {
-				error(elem, "Warning message cannot be an empty string");
-			} else {
-				ac->warning_message = msg;
-			}
-		} else {
-			error(elem, "Expected a string value for '%.*s'", LIT(name));
-		}
-		return true;
 	} else if (name == "require_results") {
 		if (value != nullptr) {
 			error(elem, "Expected no value for '%.*s'", LIT(name));
@@ -3627,6 +3663,12 @@ gb_internal DECL_ATTRIBUTE_PROC(var_decl_attribute) {
 			error(elem, "'static' does not have any parameters");
 		}
 		ac->is_static = true;
+		return true;
+	} else if (name == "rodata") {
+		if (value != nullptr) {
+			error(elem, "'rodata' does not have any parameters");
+		}
+		ac->rodata = true;
 		return true;
 	} else if (name == "thread_local") {
 		ExactValue ev = check_decl_attribute_value(c, value);
@@ -3874,10 +3916,11 @@ gb_internal void check_decl_attributes(CheckerContext *c, Array<Ast *> const &at
 			}
 
 			if (!proc(c, elem, name, value, ac)) {
-				if (!build_context.ignore_unknown_attributes) {
+				if (!build_context.ignore_unknown_attributes &&
+				    !string_set_exists(&build_context.custom_attributes, name)) {
 					ERROR_BLOCK();
 					error(elem, "Unknown attribute element name '%.*s'", LIT(name));
-					error_line("\tDid you forget to use build flag '-ignore-unknown-attributes'?\n");
+					error_line("\tDid you forget to use the build flag '-ignore-unknown-attributes' or '-custom-attribute:%.*s'?\n", LIT(name));
 				}
 			}
 		}
@@ -4073,6 +4116,7 @@ gb_internal void check_collect_value_decl(CheckerContext *c, Ast *decl) {
 	bool is_test = false;
 	bool is_init = false;
 	bool is_fini = false;
+	bool is_priv = false;
 
 	for_array(i, vd->attributes) {
 		Ast *attr = vd->attributes[i];
@@ -4117,6 +4161,8 @@ gb_internal void check_collect_value_decl(CheckerContext *c, Ast *decl) {
 				}
 				if (!success) {
 					error(value, "'%.*s' expects no parameter, or a string literal containing \"file\" or \"package\"", LIT(name));
+				} else {
+					is_priv = true;
 				}
 
 
@@ -4136,6 +4182,11 @@ gb_internal void check_collect_value_decl(CheckerContext *c, Ast *decl) {
 				is_fini = true;
 			}
 		}
+	}
+
+	if (is_priv && is_test) {
+		error(decl, "Attribute 'private' is not allowed on a test case");
+		return;
 	}
 
 	if (entity_visibility_kind == EntityVisiblity_Public &&
@@ -4965,9 +5016,8 @@ gb_internal void check_foreign_import_fullpaths(Checker *c) {
 
 				String file_str = op.value.value_string;
 				file_str = string_trim_whitespace(file_str);
-
 				String fullpath = file_str;
-				if (allow_check_foreign_filepath()) {
+				if (!is_arch_wasm() || string_ends_with(file_str, str_lit(".o"))) {
 					String foreign_path = {};
 					bool ok = determine_path_from_string(nullptr, decl, base_dir, file_str, &foreign_path, /*use error not syntax_error*/true);
 					if (ok) {
@@ -5852,35 +5902,6 @@ gb_internal void remove_neighbouring_duplicate_entires_from_sorted_array(Array<E
 gb_internal void check_test_procedures(Checker *c) {
 	array_sort(c->info.testing_procedures, init_procedures_cmp);
 	remove_neighbouring_duplicate_entires_from_sorted_array(&c->info.testing_procedures);
-
-	if (build_context.test_names.entries.count == 0) {
-		return;
-	}
-
-	AstPackage *pkg = c->info.init_package;
-	Scope *s = pkg->scope;
-
-	for (String const &name : build_context.test_names) {
-		Entity *e = scope_lookup(s, name);
-		if (e == nullptr) {
-			Token tok = {};
-			if (pkg->files.count != 0) {
-				tok = pkg->files[0]->tokens[0];
-			}
-			error(tok, "Unable to find the test '%.*s' in 'package %.*s' ", LIT(name), LIT(pkg->name));
-		}
-	}
-
-	for (isize i = 0; i < c->info.testing_procedures.count; /**/) {
-		Entity *e = c->info.testing_procedures[i];
-		String name = e->token.string;
-		if (!string_set_exists(&build_context.test_names, name)) {
-			array_ordered_remove(&c->info.testing_procedures, i);
-		} else {
-			i += 1;
-		}
-	}
-
 }
 
 
